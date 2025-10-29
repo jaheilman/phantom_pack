@@ -1,10 +1,8 @@
 import numpy as np 
 import cv2
-import pydicom
 import random
-from fw import FWSeries, FWImagePair
-import phantom_pack as pp
-import plot_utils
+from phantompack.fw import FWSeries, FWImagePair
+from phantompack.pack_dimensions import PhantomPackDimensions
 
 SPHERE_RADIUS_MM = 100
 SPHERE_VIAL_RADIUS_MM = 11
@@ -90,8 +88,9 @@ def sim_pack_circles(pdff_img:np.ndarray, water_img:np.ndarray, pixel_spacing):
     # Valid aligned group (all values are pixels)
     img_size, _ = pdff_img.shape
     # all values in px
-    radius = pp.PP_CONST['VIAL_RADIUS_MM']/pixel_spacing 
-    spacing = pp.PP_CONST['VIAL_SEP_MM']/pixel_spacing
+    pack_dims = PhantomPackDimensions(pixel_size_mm=pixel_spacing)
+    radius = pack_dims.radius_px()
+    spacing = pack_dims.center_spacing_px()
     base_x, base_y = int(img_size/2-2*spacing), int(3*img_size/4)
     radius_range_px = 1
     loc_range_px = 1

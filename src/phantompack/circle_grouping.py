@@ -47,26 +47,6 @@ def find_circle_groups(circles, radius, spacing, num_circles_in_group = 5, radiu
 
 # === Test Dataset Generation ===
 
-def plot_circles(circles, title="Circles Visualization"):
-    fig, ax = plt.subplots()
-    for idx, (x, y, r) in enumerate(circles):
-        circle = plt.Circle((x, y), r, fill=False, edgecolor='b')
-        ax.add_patch(circle)
-        ax.text(x, y, str(idx), fontsize=12, ha='center', va='center', color='r')
-    min_dim = 0
-    max_dim = 256
-    # for idx, (x, y, r) in enumerate(circles):
-    #     min_dim = min(min_dim, x - r)
-    #     min_dim = min(min_dim, y - r)
-    #     max_dim = max(max_dim, x + r)
-    #     max_dim = max(max_dim, y + r)
-    ax.set_aspect('equal', 'box')
-    ax.set_xlim(min_dim, max_dim)
-    ax.set_ylim(min_dim, max_dim)
-    plt.title(title)
-    plt.grid(True)
-    plt.show()
-
 
 
 # TESTING
@@ -112,6 +92,7 @@ def randomize_data(data):
 
 # === Run the Test ===
 
+from plot_utils import plot_circles
 def main():
     test_circles = generate_test_data()
     # randomize_data(test_circles)

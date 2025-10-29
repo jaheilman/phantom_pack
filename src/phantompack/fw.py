@@ -15,6 +15,16 @@ class FWSeries:
         self.series_description_water = ""
         self.image_pairs:list[FWImagePair] = []
         self.pack_midpoint:float = -999.9
+
+
+    def pixel_size(self) -> float:
+        px_sizes = list(set([x.pixel_spacing for x in self.image_pairs]))
+        if len(px_sizes) == 1:
+            return float(px_sizes[0])
+        else :
+            logger.warning("WARNING: different pixel sizes in series")
+            logger.warning(f"Pixel sizes: {px_sizes}")
+        return 0.0
     
     def find_pack_midpoint(self) -> float:
         midpoint = find_midpoint([x.location_full for x in self.image_pairs if x.has_circles()])

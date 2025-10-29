@@ -1,20 +1,22 @@
 import os
 import sys
-import pydicom
-import numpy as np
 import cv2
+import pydicom
 import datetime
+import numpy as np
+from image_labels import identifying_labels
+from load_dicoms import load_dicoms
+from circle_finder import circle_finder_water
+from circle_grouping import find_circle_groups
+from pack_dimensions import PhantomPackDimensions, PhantomPackTolerances, PhantomPackAnalysis
+from fw import FWSeries, FWImagePair
+import logging
+
+
 import json
 import matplotlib.pyplot as plt
-import time
-from image_labels import identifying_labels
 from statistics import mode
-from load_dicoms import load_dicoms
-from circle_grouping import find_circle_groups
-from circle_finder import circle_finder_water, circles_to_rois
-from fw import FWSeries, FWImagePair
-from plot_utils import display_image, display_image_with_circles
-import logging
+# from plot_utils import display_image, display_image_with_circles
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
@@ -27,30 +29,6 @@ MATCH_TRACE = False
 CX = 0
 CY = 1
 CR = 2
-
-# Phantom pack and analysis parameters
-# PP_CONST = {
-#     "OUTPUT_DIR" : "phantompack_results",
-#     "VIAL_RADIUS_MM" : 19/2,      # radius of the phantom pack vials
-#     "VIAL_SEP_MM" : 31,           # 20px*1.56mm/px
-#     "VIAL_SEP_TOLERANCE_MM" : 6,
-#     "ROI_RADIUS_MM" : 13/2,       # radius of the phantom pack ROI
-#     "RADIUS_TOLERANCE_MM" : 4,    # only find circles VIAL_RADIUS +/- RADIUS_TOLERANCE
-#     "VERT_ALIGN_TOLERANCE_MM" : 7,
-#     "ANALYSIS_SPAN_MM" : 20,      # analyze a range of images centered at the midpoint
-#     "ANALYSIS_CENTER_MM" : None,  # center span at a specific location, None to use midpoint
-# }
-PP_CONST = {
-    "OUTPUT_DIR" : "phantompack_results",
-    "VIAL_RADIUS_MM" : 19/2,      # radius of the phantom pack vials
-    "VIAL_SEP_MM" : 31,           # 20px*1.56mm/px
-    "VIAL_SEP_TOLERANCE_MM" : 3,
-    "ROI_RADIUS_MM" : 13/2,       # radius of the phantom pack ROI
-    "RADIUS_TOLERANCE_MM" : 7,    # only find circles VIAL_RADIUS +/- RADIUS_TOLERANCE
-    "VERT_ALIGN_TOLERANCE_MM" : 7,
-    "ANALYSIS_SPAN_MM" : 20,      # analyze a range of images centered at the midpoint
-    "ANALYSIS_CENTER_MM" : None,  # center span at a specific location, None to use midpoint
-}
 
 
 TIMESTAMP = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -77,19 +55,23 @@ DICOM_TAG_LIST = [
 
 def phantom_pack(
         directory_path:str,
-        vial_radius = PP_CONST["VIAL_RADIUS_MM"],
-        radius_tolerance = PP_CONST["RADIUS_TOLERANCE_MM"], 
-        vert_align_tol = PP_CONST["VERT_ALIGN_TOLERANCE_MM"],
-        roi_radius = PP_CONST["ROI_RADIUS_MM"],
-        span_mm = PP_CONST["ANALYSIS_SPAN_MM"],
+        pack_dimensions = PhantomPackDimensions(),
+        tolerances = PhantomPackTolerances(),
+        analysis = PhantomPackAnalysis(),
     ) -> dict:
     '''
     process all pdff data in directory_path
     return a list of dictionaries containing results for each pdff/water pair
     '''
 
+    # vial_radius = PP_CONST["VIAL_RADIUS_MM"],
+    # radius_tolerance = PP_CONST["RADIUS_TOLERANCE_MM"], 
+    # vert_align_tol = PP_CONST["VERT_ALIGN_TOLERANCE_MM"],
+    # roi_radius = PP_CONST["ROI_RADIUS_MM"],
+    # span_mm = PP_CONST["ANALYSIS_SPAN_MM"],
+
     # prepare output directory
-    output_dir = os.path.join(directory_path, PP_CONST["OUTPUT_DIR"])
+    output_dir = os.path.join(directory_path, analysis.output_dir)
     os.makedirs(output_dir, exist_ok=True)
     #todo: make sure directory exist and is writeable
 
@@ -110,29 +92,33 @@ def phantom_pack(
     log_unknowns_to_file(output_dir, all_dicoms)
 
     # loop over series pairs to find phantom packs
-    for fw_serie in fw_series_paired:
-        if len(fw_serie.image_pairs) == 0: # no data
+    for fw_ser in fw_series_paired:
+        if len(fw_ser.image_pairs) == 0: # no data
             continue
         logger.info("")
-        logger.info(f"Processing PDFF series {fw_serie.series_number_pdff} {fw_serie.series_description_pdff}")
-        logger.info(f"     with WATER series {fw_serie.series_number_water} {fw_serie.series_description_water}")
+        logger.info(f"Processing PDFF series {fw_ser.series_number_pdff}  {fw_ser.series_description_pdff}")
+        logger.info(f"     with WATER series {fw_ser.series_number_water} {fw_ser.series_description_water}")
+
+        pack_dimensions.pixel_size = fw_ser.pixel_size()
 
         find_packs_in_images(
-            fw_serie,
-            vial_radius=vial_radius,
-            radius_tolerance=radius_tolerance,
-            vert_align_tol=vert_align_tol
+            fw_ser,
+            pack_dimensions = pack_dimensions,
+            tolerances = tolerances,
+            # vial_radius=pack,
+            # radius_tolerance=radius_tolerance,
+            # vert_align_tol=vert_align_tol
         )
-        fw_serie.sort_data_by_sliceloc()
-        fw_serie.create_rois(roi_radius=roi_radius) # put ROIs from all found circles
+        fw_ser.sort_data_by_sliceloc()
+        fw_ser.create_rois(roi_radius=roi_radius) # put ROIs from all found circles
 
         # COMPUTE STATISTICS
-        fw_serie.pack_midpoint = fw_serie.find_pack_midpoint() #set fw_series.pack_midpoint
-        fw_serie.find_pack_locations() # set first and last locations and indeces of pack
-        if fw_serie.pack_midpoint is None:
-            logger.warning(f"No pack midpoint found for series {fw_serie.series_number_pdff} {fw_serie.series_description_pdff}")
+        fw_ser.pack_midpoint = fw_ser.find_pack_midpoint() #set fw_series.pack_midpoint
+        fw_ser.find_pack_locations() # set first and last locations and indeces of pack
+        if fw_ser.pack_midpoint is None:
+            logger.warning(f"No pack midpoint found for series {fw_ser.series_number_pdff} {fw_ser.series_description_pdff}")
             continue
-        results = compute_and_save_results(span_mm, output_dir, fw_serie)
+        results = compute_and_save_results(analysis.span, output_dir, fw_ser)
     return results
 
 def compute_and_save_results(span_mm, output_dir, fw_serie:FWSeries) -> dict:
@@ -227,38 +213,6 @@ def label_dataset(ds:pydicom.Dataset):
 
 
 
-
-# def slice_stats(img:ImagePair) -> dict:
-#     # Compute the mean, median, and standard dev of a pdff/water pair.
-#     # img should be a single slice of the img_pack_data, with pdff, water and rois
-#     # Output: pdff_means:[], pdff_stddevs:[], pdff_medians:[] - lists of mean, stddev, median
-#     # for the circles
-#     stats = {}
-#     # default values are -10
-#     if img.has_rois() is False:
-#         stats["pdff_means"] = [-10]*5 # HACK - fixed for 5 ROIs
-#         stats["pdff_medians"] = [-10]*5
-#         stats["pdff_stddevs"] = [0]*5
-#         return stats
-#     # apply rois to PDFF
-#     pdff_means = []
-#     pdff_medians = []
-#     pdff_stddevs = []
-#     for r in img.rois:
-#         # make a circle mask that can be applied to pdff
-#         mask = np.zeros(img.pdff.pixel_array.shape, dtype=np.uint8)
-#         cv2.circle(mask, (r[CX], r[CY]), r[CR], color=1, thickness=-1) # solid circle (thickness = -1) filled with  1
-#         # calculate mean and median
-#         mean_pdff   = masked_mean(  img.pdff.pixel_array, mask)
-#         median_pdff = masked_median(img.pdff.pixel_array, mask)
-#         stddev_pdff = masked_stddev(img.pdff.pixel_array, mask)
-#         pdff_means.append(mean_pdff)
-#         pdff_medians.append(median_pdff)
-#         pdff_stddevs.append(stddev_pdff)
-#     stats["pdff_means"] = pdff_means
-#     stats["pdff_medians"] = pdff_medians
-#     stats["pdff_stddevs"] = pdff_stddevs
-#     return stats
 
 def composite_statistics(fw_series:FWSeries, stats_min_loc, stats_max_loc) -> dict:
     '''
@@ -357,29 +311,27 @@ def create_negative_image(img):
 
 def find_packs_in_images(
         fw_series:FWSeries,
-        vial_radius = PP_CONST["VIAL_RADIUS_MM"],
-        radius_tolerance = PP_CONST["RADIUS_TOLERANCE_MM"],
-        vert_align_tol = PP_CONST["VERT_ALIGN_TOLERANCE_MM"],
-        vial_separation = PP_CONST["VIAL_SEP_MM"],
-        vial_sep_tolerance = PP_CONST["VIAL_SEP_TOLERANCE_MM"],
+        pack_dimensions:PhantomPackDimensions,
+        pack_tolerances:PhantomPackTolerances,
         ):
     '''
         Finds circles in pdff/water image pairs ammends the fw_series.image_pairs to include those circles
     '''
     for ip in fw_series.image_pairs:
-        px_size = ip.pixel_spacing
-        min_radius, max_radius, min_vail_sep = vial_sizes_in_px(vial_radius, radius_tolerance, px_size)
-        water_circles = circles_img_bottom(ip.water_img, min_radius, max_radius, min_vail_sep)
-        # display_image_with_circles(ip.water_img, water_circles, name=str(ip.location_full), waitkey=0)
-        num_circles_in_pack = 5
+        # find min and max radius and min center spacing
+        min_radius = pack_dimensions.radius_px() - pack_tolerances.radius_px()
+        max_radius = pack_dimensions.radius_px() + pack_tolerances.radius_px()
+        min_center_spacing = pack_dimensions.center_spacing_px() - pack_tolerances.center_spacing_px()
+        # find circles and circle groups
+        water_circles = circles_in_image_bottom(ip.water_img, min_radius, max_radius, min_center_spacing)
         pack_circles = find_circle_groups(
             water_circles,
-            radius = vial_radius/px_size,
-            spacing = vial_separation/px_size,
-            num_circles_in_group = num_circles_in_pack,
-            radius_tol = radius_tolerance/vial_radius,
-            linear_tol = vert_align_tol/vial_separation,
-            spacing_tol = vial_sep_tolerance/vial_separation)
+            radius = pack_dimensions.radius_px(),
+            spacing = pack_dimensions.center_spacing_px(),
+            num_circles_in_group = pack_dimensions.vial_count,
+            radius_tol = pack_tolerances.radius_px(),
+            linear_tol = pack_tolerances.vertical_align_px()/pack_dimensions.vial_center_spacing, #vert_align_tol/vial_separation,
+            spacing_tol = min_center_spacing)
         if pack_circles == []:
             continue
         # drop trivial first dimension/ hack: keep only first group
@@ -392,13 +344,13 @@ def find_packs_in_images(
     #         f.write(f"Series {water_ds.SeriesNumber}, {water_ds.SeriesDescription}")
     return
 
-def circles_img_bottom(img, min_radius, max_radius, min_vail_sep):
+def circles_in_image_bottom(img, min_radius, max_radius, min_vail_sep):
     cropped_img = make_clipped_image(img)
     circles = circle_finder_water(cropped_img, minDist=min_vail_sep, minRadius=min_radius, maxRadius=max_radius)
     return circles
 
 def make_clipped_image(water_img, cutoff_top=0.65) -> np.ndarray:
-    ''' Blacks off the top .65 of an image '''
+    ''' Blacks off the top {cutoff_top} of an image '''
     water_matlike = np.matrix(water_img)
     cutoff = int(np.floor(water_matlike.shape[0]*cutoff_top))
     water_matlike[:cutoff,:] = 0
@@ -438,12 +390,6 @@ def find_fw_pairs(all_dicoms:list[pydicom.Dataset]) -> list[FWSeries]:
                 fw_series.image_pairs.append(img_pair)
         series_found.append(fw_series)
     return series_found
-
-def vial_sizes_in_px(vial_radius, radius_tolerance, px_size):
-    min_radius = int(vial_radius/px_size) - int(radius_tolerance/px_size)
-    max_radius = int(vial_radius/px_size) + int(np.ceil(radius_tolerance/px_size))
-    min_vail_sep = vial_radius/px_size
-    return min_radius,max_radius,min_vail_sep
 
 
 def sort_circles_by_x_coord(circles:np.ndarray):

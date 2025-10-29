@@ -1,0 +1,37 @@
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "phantompack"
+version = "0.1.0"
+description = "Analysis Engine for Calimetrix Phantom Pack"
+readme = "README.md"
+license = "MIT"
+authors = [
+  { name="Jeremiah Heilman", email="jheilman@resoundant.com" }
+]
+dependencies = [
+    "numpy==1.26.2",
+    "opencv-python==4.8.1.78",
+    "Pillow==10.3.0",
+    "pydicom==2.4.4",
+    "matplotlib",
+    "pandas",
+    "openpyxl"
+]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "examples"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/phantompack"]
+
+[tool.hatch.envs.default]
+dependencies = [
+  "pytest"
+]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest -q"
